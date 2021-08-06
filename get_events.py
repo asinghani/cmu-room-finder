@@ -28,7 +28,7 @@ CATEGORIES = ["athletics", "computer_lab", "classroom", "cuc", "study_room", "ad
 
 BASE_URL_25LIVE = "https://25live.collegenet.com/25live/data/cmu/run"
 
-SOC_FILE = "courses-f21.json"
+SOC_FILE = "courses-f21.txt"
 CURRENT_MINI = 1
 CAMPUS = "Pittsburgh, Pennsylvania"
 
