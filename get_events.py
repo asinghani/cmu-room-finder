@@ -10,6 +10,7 @@ import re
 import copy
 from tqdm import tqdm
 import sys
+import pickle
 
 SPACES_NOTES = {
     "HH 1305": "ECE Linux Cluster",
@@ -47,12 +48,18 @@ def req_25live_endpoint(url):
     out = json.loads(out)
     return out
 
+login = req_25live_endpoint("/login.json?caller=pro")
+if "login_response" not in login or "login" not in login["login_response"] or "username" not in login["login_response"]["login"]:
+    print("Invalid cookie")
+    sys.exit(1)
+
+
 def get_25live_space_categories():
     url = "/home/dash/panel-space-searches-collections.json?caller=pro-DashPanelDao.getSpaceSearchesCollections"
     data = req_25live_endpoint(url)
     data = data["spaceSearchesCollections"]
     data = {x["itemId"]: x["itemName"] for x in data}
-    return data 
+    return data
 
 def get_all_25live_spaces():
     page_size = 999
@@ -70,27 +77,27 @@ def get_all_25live_spaces():
         "default_capacity": int(row.get("default_capacity", 0)),
         "max_capacity": int(row.get("max_capacity", 0))
     } for row in rows]
-            
+
     return spaces
 
 def get_25live_timings_for_space(space_id, date, course_names={}):
     dt = date.strftime("%Y-%m-%d")
     url = f"/rm_reservations.json?space_id={space_id}&start_dt={dt}T00:00:00&end_dt={dt}T23:59:00&include=closed+blackouts+pending+related+empty&caller=pro-ReservationService.getReservations"
-    
+
     if "space_reservation" not in req_25live_endpoint(url)["space_reservations"]:
         print(f"Warning: no reservations found for {space_id}")
         return []
-    
+
     data = req_25live_endpoint(url)["space_reservations"]["space_reservation"]
 
     if not isinstance(data, list):
         data = [data]
-    
+
     events = []
     for x in data:
         if "event" not in x:
             continue
-            
+
         if x["event"]["event_type_name"] == "closed":
             continue
 
@@ -99,7 +106,7 @@ def get_25live_timings_for_space(space_id, date, course_names={}):
             course_name = course_names.get(coursenum[0], None)
         else:
             course_name = None
-        
+
         events.append({
             "name": x["event"]["event_name"],
             "title": x["event"]["event_title"],
@@ -110,24 +117,24 @@ def get_25live_timings_for_space(space_id, date, course_names={}):
             "end": dateutil.parser.parse(x["reservation_end_dt"]).replace(tzinfo=None),
             "course_name": course_name
         })
-        
-    
+
+
     return events
 
 
 def soc_include_location(building, room):
     if building is None or room is None:
         return False
-    
+
     if room in ["REMOTE", "DNM"]:
         return False
-    
+
     if building in ["DNM"]:
         return False
-    
+
     if room.endswith("flr"):
         return False
-    
+
     # TODO: include CUC?
     return building in ["ANS", "BH", "CFA", "CIC", "CYH", "DH", "GHC", "HBH",
                         "HH", "HL", "HOA", "MI", "MM", "NSH", "PCA", "PH", "POS", "REH",
@@ -136,7 +143,7 @@ def soc_include_location(building, room):
 def get_all_soc_course_names():
     with open(SOC_FILE, "r") as f:
         data = json.load(f)
-        
+
     data = data["courses"]
     data = {k.replace("-", ""): v["name"] for k, v in data.items()}
     return data
@@ -144,33 +151,33 @@ def get_all_soc_course_names():
 def get_all_soc_timings():
     with open(SOC_FILE, "r") as f:
         data = json.load(f)
-    
+
     data = data["courses"]
-    
+
     timings = []
     locations = set()
-    
+
     for k, v in data.items():
         course_info = {
             "number": k,
             "name": v["name"],
             "department": v["department"]
         }
-        
+
         for section in v["lectures"] + v["sections"]:
             if len(section["name"]) == 2 and section["name"][0] in string.ascii_uppercase and \
                section["name"][1].isdigit() and int(section["name"][1]) != CURRENT_MINI:
                 continue
-            
+
             for time in section["times"]:
                 if time["location"] != CAMPUS or time["days"] is None:
                     continue
-                
+
                 if not soc_include_location(time["building"], time["room"]):
                     continue
-                
+
                 locations.add(f"{time['building']} {time['room']}")
-                
+
                 for day in time["days"]:
                     timings.append(dict(course_info, **{
                         "instructors": section["instructors"],
@@ -179,7 +186,7 @@ def get_all_soc_timings():
                         "end": time["end"],
                         "day": day
                     }))
-                    
+
     locations = list(locations)
     timings = [{location: [x for x in timings if x["day"] == day and x["location"] == location] for location in locations}
                for day in range(7)]
@@ -190,30 +197,30 @@ def get_all_soc_timings():
 def get_registrar_spaces():
     data = pd.read_csv(REGISTRAR_FILE)
     data = data.where(data.notnull(), None).to_dict("records")
-    
+
     spaces = {}
     for x in data:
         if x["building"] is None or x["room"] is None or len(x["building"]) < 1 or len(x["room"]) < 1:
             continue
-            
+
         if not soc_include_location(str(x["building"]), str(x["room"])):
             continue
-            
+
         dept = x.get("department", "UNKNOWN")
         if dept is None: dept = "UNKNOWN"
         else: dept = dept.strip()
-            
+
         capacity = x.get("capacity", 0)
         if capacity is None: capacity = 0
         elif capacity.endswith("+"): capacity = int(capacity[:-1])
         else: capacity = int(capacity)
-            
+
         room_type = x.get("type", "UNKNOWN")
         if room_type is None: room_type = "UNKNOWN"
         else: room_type = room_type.strip()
-        
+
         loc = f"{x['building'].strip()} {x['room'].strip()}"
-        
+
         spaces[loc] = {
             "location": loc,
             "department": dept,
@@ -221,7 +228,7 @@ def get_registrar_spaces():
             "capacity": capacity,
             "type": room_type
         }
-        
+
     return spaces
 
 
@@ -389,7 +396,7 @@ def get_all_spaces():
         for s, ok, ov in OVERRIDES:
             if s == space["location"]:
                 assert ok in space.keys()
-                space[ok] = ov    
+                space[ok] = ov
 
         spaces.append(space)
 
@@ -404,14 +411,14 @@ def _create_event(event_soc, event25, date):
         start_time = datetime(date.year, date.month, date.day, start_time.hour, start_time.minute, start_time.second)
         end_time = dateutil.parser.parse(event_soc["end"])
         end_time = datetime(date.year, date.month, date.day, end_time.hour, end_time.minute, end_time.second)
-    
+
         if event25:
             start_time = min(start_time, event25["start"])
             end_time = max(end_time, event25["end"])
     else:
         start_time = event25["start"]
         end_time = event25["end"]
-        
+
     if event_soc:
         name = f"{event_soc['number']}: {event_soc['name']}"
     else:
@@ -420,7 +427,7 @@ def _create_event(event_soc, event25, date):
         title = title.strip()
         if len(title) < 1: title = event25["title"]
         name = f"{event25['name']}: {title}"
-        
+
     if event_soc and event25:
         status = f"Course {event25['state']}".strip()
     elif event25:
@@ -428,26 +435,26 @@ def _create_event(event_soc, event25, date):
         if len(status) < 1: status = "Unknown"
     else:
         status = "Course"
-        
+
     if event_soc and event25:
         source = "SOC & 25Live"
     elif event25:
         source = "25Live"
     else:
         source = "SOC"
-        
+
     comment = ""
 
     if event_soc:
         instr = "; ".join(event_soc["instructors"])
         comment += f"Instructor(s): {instr}\n"
-    
+
     if event25:
         comment += event25["name"] + "\n\n"
         comment += event25["comment"]
-    
+
     comment = comment.strip()
-    
+
     event = {
         "start": start_time,
         "end": end_time,
@@ -456,60 +463,60 @@ def _create_event(event_soc, event25, date):
         "source": source,
         "comment": comment
     }
-    
+
     return event
 
 def get_space_events(space, soc_timings, date, course_names={}):
     day_of_week = date.isoweekday() % 7
-    
+
     if space["25live_id"]:
         events25 = copy.deepcopy(get_25live_timings_for_space(space["25live_id"], date, course_names))
     else:
         events25 = []
-        
+
     if space["location"] in soc_timings[day_of_week]:
         events_soc = copy.deepcopy(soc_timings[day_of_week][space["location"]])
     else:
         events_soc = []
-    
+
     events = []
-    
+
     for event_soc in events_soc[:]:
-        
+
         # Allows for deletion while iterating
         if event_soc not in events_soc:
             continue
-            
+
         start_time = dateutil.parser.parse(event_soc["start"])
         start_time = datetime(date.year, date.month, date.day, start_time.hour, start_time.minute, start_time.second)
         end_time = dateutil.parser.parse(event_soc["end"])
         end_time = datetime(date.year, date.month, date.day, end_time.hour, end_time.minute, end_time.second)
-        
+
         e25 = [x for x in events25 if abs((x["start"] - start_time).seconds) <= 300 and abs((x["end"] - end_time).seconds) <= 300]
         for x in e25: events25.remove(x)
-        
+
         if len(e25) > 0:
             e25 = e25[0]
         else:
             e25 = None
-            
+
         soc_repeats = [x for x in events_soc if abs((dateutil.parser.parse(x["start"]) - start_time).seconds) <= 300 and abs((dateutil.parser.parse(x["end"]) - end_time).seconds) <= 300]
         for x in soc_repeats: events_soc.remove(x)
-            
+
         events.append(_create_event(event_soc, e25, date))
-        
+
     for event in events25[:]:
         # Allows for deletion while iterating
         if event not in events25:
             continue
-            
+
         e25 = [x for x in events25 if abs((x["start"] - event["start"]).seconds) <= 300 and abs((x["end"] - event["end"]).seconds) <= 300]
         for x in e25: events25.remove(x)
-    
+
         events.append(_create_event(None, event, date))
-        
+
     return events
-    
+
 
 def get_all_events(spaces, soc_timings, date, course_names={}):
     return {space["name"]: get_space_events(space, soc_timings, date, course_names) for space in tqdm(spaces)}
@@ -526,8 +533,8 @@ course_names = get_all_soc_course_names()
 
 all_events = get_all_events(spaces, soc_timings, date, course_names)
 
-with open("spaces.json", "w+") as f:
-    json.dump(spaces, f)
-    
-with open(f"events-{date.strftime('%Y-%m-%d')}.json", "w+") as f:
-    json.dump(all_events, f)
+with open("spaces.pkl", "wb+") as f:
+    pickle.dump(spaces, f)
+
+with open(f"events-{date.strftime('%Y-%m-%d')}.pkl", "wb+") as f:
+    pickle.dump(all_events, f)
