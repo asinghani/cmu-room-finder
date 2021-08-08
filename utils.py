@@ -1,6 +1,7 @@
 import click
 import sys
 import pickle
+import dateutil.parser
 from datetime import datetime
 from config import *
 
@@ -48,6 +49,13 @@ def get_spaces(spaces, category, min_capacity, filter, require_25live, fav_only)
     return cat_spaces
 
 def print_table(header, rows):
+    assert len(header) == len(rows[0])
+
+    lengths = [max(len(click.unstyle(header[i])), max(len(click.unstyle(row[i])) for row in rows)) for i in range(len(header))]
+
+    header = [ljust_ansi(x, lengths[i]) for i, x in enumerate(header)]
+    rows = [[ljust_ansi(x, lengths[i]) for i, x in enumerate(row)] for row in rows]
+
     if FANCY_TABLE:
         header_str = " │ ".join(header)
         click.echo("┌─" + ("".join(["─" if c != "│" else "┬" for c in header_str])) + "─┐")
@@ -108,12 +116,16 @@ def parse_hours_delta(delta_str):
     click.echo(f"Invalid number of hours '{delta_str}'", err=True)
     sys.exit(1)
 
-def events_to_blocks(events):
+def events_to_blocks(date, events):
     blocks = []
     events = sorted(events, key=lambda x: x["start"])
 
+    y = date.year
+    m = date.month
+    d = date.day
+
     if len(events) == 0:
-        return []
+        return [{"start": datetime(y, m, d, 0, 0), "end": datetime(y, m, d, 23, 59), "available": True}]
 
     if len(events) > 0 and events[0]["start"].day != events[0]["end"].day:
         events[0]["start"] = datetime(events[0]["end"].year, events[0]["end"].month, events[0]["end"].day, 0, 0)
@@ -126,10 +138,6 @@ def events_to_blocks(events):
     assert len(set(x["start"].year for x in events)) == 1
     assert len(set(x["start"].month for x in events)) == 1
     assert len(set(x["start"].day for x in events)) == 1
-
-    y = events[0]["start"].year
-    m = events[0]["start"].month
-    d = events[0]["start"].day
 
     cur_time = (0, 0)
     while len(events) > 0:
@@ -155,3 +163,50 @@ def ljust_ansi(string, length):
         return string + (" " * (length - len(plaintext)))
     else:
         return string
+
+def shorten(string, length):
+    if len(string) > length:
+        string = string[:length-3] + "..."
+    return string
+
+def find_available_rooms(rooms, date, start_time, end_time, verbose):
+    all_cats = set(x["category"] for x in rooms)
+    include_cat = len(all_cats) > 1
+
+    events_all = load_events(date)
+    blocks_all = [(room, events_to_blocks(dateutil.parser.parse(date), events_all[room["location"]])) for room in rooms]
+
+    avail = []
+    for room, blocks in blocks_all:
+        time_block = None
+        prev = None
+        for block in blocks:
+            if start_time >= block["start"] and start_time <= block["end"]:
+                time_block = block
+                break
+
+            prev = block
+
+        assert time_block is not None
+
+        if prev is None:
+            prev = {"end": time_block["start"], "name": "None"}
+
+        if end_time <= time_block["end"] and time_block["available"]:
+            avail.append((room, prev))
+
+    avail = sorted(avail, key=lambda x: ("A" if x[0]["location"] in FAVORITES else "B") + x[0]["location"])
+
+    header = ["Location", "Category", "Capacity", "Available"] + (["Previous Event"] if verbose else [])
+
+    rows = [(click.style(x["location"], bold=x["location"] in FAVORITES,
+                fg="green" if x["location"] in FAVORITES else "red" if x["25live_id"] is None else "white"),
+             x["category"],
+             str(x["capacity"]),
+             y["end"].strftime('%I:%M%p')) + (shorten(y["name"], 40),) if verbose else tuple() for x, y in avail]
+
+    if not include_cat:
+        header = header[0:1] + header[2:]
+        rows = [row[0:1] + row[2:] for row in rows]
+
+    print_table(header, rows)

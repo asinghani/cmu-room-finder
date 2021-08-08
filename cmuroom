@@ -3,7 +3,7 @@ import pickle
 import click
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 import dateutil.parser
 import ansiwrap
 from config import *
@@ -78,10 +78,9 @@ def rooms(favorite, require_full, filter, category, min_capacity):
 
     rows = sorted(rows, key=lambda x: ("A" if x[0] == STAR_CHAR else "B") + x[2])
 
-    lengths = [max(len(a[i]) for a in [header]+rows) for i in range(len(rows[0]))]
-
-    header = [a.ljust(lengths[i]) for i, a in enumerate(header)]
-    rows = [[a.ljust(lengths[i]) for i, a in enumerate(row)] for row in rows]
+    #lengths = [max(len(a[i]) for a in [header]+rows) for i in range(len(rows[0]))]
+    #header = [a.ljust(lengths[i]) for i, a in enumerate(header)]
+    #rows = [[a.ljust(lengths[i]) for i, a in enumerate(row)] for row in rows]
 
     rows = [(fav, ind,
              click.style(loc, bold=(fav == STAR_CHAR),
@@ -143,7 +142,7 @@ def room(verbose, date, location):
 
     events = load_events(date)
     events = events[room["location"]]
-    blocks = events_to_blocks(events)
+    blocks = events_to_blocks(dateutil.parser.parse(date), events)
 
     rows = []
     max_len = 0
@@ -220,7 +219,8 @@ def available(favorite, require_full, verbose, date, filter, category, min_capac
     number_of_hours = parse_hours_delta(number_of_hours)
 
     try:
-        date = dateutil.parser.parse(date).strftime("%Y-%m-%d")
+        date_parsed = dateutil.parser.parse(date)
+        date = date_parsed.strftime("%Y-%m-%d")
     except:
         click.echo(f"Invalid date '{date}'.", err=True)
         sys.exit(1)
@@ -228,12 +228,59 @@ def available(favorite, require_full, verbose, date, filter, category, min_capac
     if date != today:
         click.secho("Warning: lookup date is not today", fg="red")
 
-    events_all = load_events(date)
-    blocks = [(room, events_to_blocks(events_all[room["location"]])) for room in sp]
+    now = datetime.now()
 
-    print(blocks)
+    start_time = datetime(date_parsed.year, date_parsed.month, date_parsed.day, now.hour, now.minute)
+    end_time = datetime(date_parsed.year, date_parsed.month, date_parsed.day, now.hour, now.minute) + timedelta(hours=number_of_hours)
 
-    print(verbose, number_of_hours)
+    if end_time.day != start_time.day:
+        click.echo("Error: too many hours - time extends into next day", err=True)
+        sys.exit(1)
+
+    find_available_rooms(sp, date, start_time, end_time, verbose)
+
+@cmuroom.command("available-at")
+@click.option("--favorite", "-f",
+              is_flag=True, default=False, help="Show favorite rooms only")
+@click.option("--require-full", "-r",
+              is_flag=True, default=False, help="Require full information from 25Live")
+@click.option("--verbose", "-v",
+              is_flag=True, default=False, help="Show extra information about events")
+@click.option("--date", "-D",
+              metavar="DATE", default=today, help="The date for which to check events")
+@click.option("--filter", "-F",
+              metavar="KEYWORD", default="", help="Keyword to filter rooms by")
+@click.option("--category", "-C",
+              metavar="CATEGORIES", default="default", help="Comma-separated list of categories")
+@click.option("--min-capacity", "-M",
+              metavar="CAPACITY", type=int, default=0, help="Minimum capacity for the room")
+@click.argument("from_time", required=True)
+@click.argument("to_time", required=True)
+def available(favorite, require_full, verbose, date, filter, category, min_capacity, from_time, to_time):
+    """Find rooms that are continuously available from FROM_TIME to TO_TIME"""
+    sp = get_spaces(spaces, category, min_capacity, filter, require_full, favorite)
+
+    try:
+        date_parsed = dateutil.parser.parse(date)
+        date = date_parsed.strftime("%Y-%m-%d")
+    except:
+        click.echo(f"Invalid date '{date}'.", err=True)
+        sys.exit(1)
+
+    if date != today:
+        click.secho("Warning: lookup date is not today", fg="red")
+
+    from_time = dateutil.parser.parse(from_time)
+    to_time = dateutil.parser.parse(to_time)
+
+    start_time = datetime(date_parsed.year, date_parsed.month, date_parsed.day, from_time.hour, from_time.minute)
+    end_time = datetime(date_parsed.year, date_parsed.month, date_parsed.day, to_time.hour, to_time.minute)
+
+    if end_time <= start_time:
+        click.echo("Error: invalid time range", err=True)
+        sys.exit(1)
+
+    find_available_rooms(sp, date, start_time, end_time, verbose)
 
 if __name__ == "__main__":
     cmuroom()

@@ -19,8 +19,6 @@ cmuroom [--favorite] [--require-full] [--verbose] [--date DATE] [--filter KEYWOR
 
 cmuroom [--favorite] [--require-full] [--verbose] [--date DATE] [--filter KEYWORD] [--category CATEGORY] [--min-capacity CAPACITY] available-at START_TIME END_TIME - show all rooms which will be available from START_TIME to END_TIME
 
-cmuroom [--favorite] [--require-full] [--verbose] [--date DATE] [--filter KEYWORD] [--category CATEGORY] [--min-capacity CAPACITY] available-soon WITHIN_HOURS - show all rooms which are not currently available, but will become available within WITHIN_HOURS
-
 HOURS can be specified as integer, float, and optionally with "m"/"min" suffix for minutes instead
 
 -D = --date
