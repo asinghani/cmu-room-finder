@@ -10,6 +10,8 @@ from config import *
 from utils import *
 
 base_path = os.path.abspath(os.path.split(__file__)[0])
+os.chdir(base_path)
+
 today = datetime.now().strftime("%Y-%m-%d")
 
 try:

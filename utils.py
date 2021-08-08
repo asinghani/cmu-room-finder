@@ -31,7 +31,7 @@ def get_spaces(spaces, category, min_capacity, filter, require_25live, fav_only)
         cat_spaces = [space for space in spaces if space["category"] in cat]
 
     if len(cat_spaces) == 0:
-        click.echo("Invalid category or no spaces found", err)
+        click.echo("Invalid category or no spaces found", err=True)
         sys.exit(1)
 
     cat_spaces = [x for x in cat_spaces if (x["capacity"] is None or x["capacity"] < 1 or x["capacity"] >= min_capacity)]
@@ -43,7 +43,7 @@ def get_spaces(spaces, category, min_capacity, filter, require_25live, fav_only)
     cat_spaces = [x for x in cat_spaces if (not fav_only) or x["location"] in FAVORITES]
 
     if len(cat_spaces) == 0:
-        click.echo("No spaces found with given capacity and filter keywords", err)
+        click.echo("No spaces found with given capacity and filter keywords", err=True)
         sys.exit(1)
 
     return cat_spaces
