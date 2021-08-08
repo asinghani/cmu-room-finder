@@ -49,6 +49,10 @@ def get_spaces(spaces, category, min_capacity, filter, require_25live, fav_only)
     return cat_spaces
 
 def print_table(header, rows):
+    if len(rows) == 0:
+        click.secho("No results found", fg="red", bold=True)
+        return
+
     assert len(header) == len(rows[0])
 
     lengths = [max(len(click.unstyle(header[i])), max(len(click.unstyle(row[i])) for row in rows)) for i in range(len(header))]
@@ -169,7 +173,7 @@ def shorten(string, length):
         string = string[:length-3] + "..."
     return string
 
-def find_available_rooms(rooms, date, start_time, end_time, verbose):
+def find_available_rooms(rooms, date, start_time, end_time, not_avail_time, verbose, sort_by_avail):
     all_cats = set(x["category"] for x in rooms)
     include_cat = len(all_cats) > 1
 
@@ -179,31 +183,42 @@ def find_available_rooms(rooms, date, start_time, end_time, verbose):
     avail = []
     for room, blocks in blocks_all:
         time_block = None
+        now_block = None
+        time_block_prev = None
         prev = None
         for block in blocks:
             if start_time >= block["start"] and start_time <= block["end"]:
+                assert time_block is None or time_block["end"] == block["start"]
                 time_block = block
-                break
+                time_block_prev = prev
+
+            if not_avail_time is not None and not_avail_time >= block["start"] and not_avail_time <= block["end"]:
+                assert now_block is None or now_block["end"] == block["start"]
+                now_block = block
 
             prev = block
 
+        prev = time_block_prev
+
+        assert not_avail_time is None or now_block is not None
         assert time_block is not None
 
         if prev is None:
             prev = {"end": time_block["start"], "name": "None"}
 
-        if end_time <= time_block["end"] and time_block["available"]:
-            avail.append((room, prev))
+        if (not_avail_time is None or not now_block["available"]) and end_time <= time_block["end"] and time_block["available"]:
+            avail.append((room, prev, time_block))
 
-    avail = sorted(avail, key=lambda x: ("A" if x[0]["location"] in FAVORITES else "B") + x[0]["location"])
+    avail = sorted(avail, key=lambda x: ("A" if x[0]["location"] in FAVORITES else "B") + (x[1]['end'].strftime('%I:%M%p') + "{:010d}".format(int(1e8) - (x[2]["end"] - x[1]["end"]).seconds) if sort_by_avail else "") + x[0]["location"])
 
     header = ["Location", "Category", "Capacity", "Available"] + (["Previous Event"] if verbose else [])
 
     rows = [(click.style(x["location"], bold=x["location"] in FAVORITES,
                 fg="green" if x["location"] in FAVORITES else "red" if x["25live_id"] is None else "white"),
              x["category"],
-             str(x["capacity"]),
-             y["end"].strftime('%I:%M%p')) + (shorten(y["name"], 40),) if verbose else tuple() for x, y in avail]
+             str(x["capacity"]) if x["capacity"] != 0 else "?",
+             f"{y['end'].strftime('%I:%M%p')} - {z['end'].strftime('%I:%M%p')} ({format_time_delta(y['end'], z['end'])})") + \
+             ((shorten(y["name"], 40),) if verbose else tuple()) for x, y, z in avail]
 
     if not include_cat:
         header = header[0:1] + header[2:]
