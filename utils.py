@@ -89,6 +89,8 @@ def format_time_delta(start, end):
 
     if mins == 0:
         return f"{hrs}hr"
+    elif hrs == 0:
+        return f"{mins}min"
     else:
         # Max = 23hr59min = 9 characters
         return f"{hrs}hr {mins}min"
