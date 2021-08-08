@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+import pickle
+import click
+import os
+import sys
+from datetime import datetime
+import dateutil.parser
+import ansiwrap
+from config import *
+from utils import *
+
+base_path = os.path.abspath(os.path.split(__file__)[0])
+today = datetime.now().strftime("%Y-%m-%d")
+
+try:
+    with open("spaces.pkl", "rb") as f:
+        spaces = pickle.load(f)
+except:
+    spaces = []
+
+# Base CLI object
+@click.group()
+def cmuroom():
+    """CLI tool for finding open/available rooms using CMU 25Live and SOC information"""
+
+@cmuroom.command("get-cookie")
+def get_cookie():
+    """Log in to 25Live and obtain session cookie"""
+    click.echo("Starting Selenium WebDriver. You may be prompted for your andrewID password and may have to complete Duo 2FA.")
+    os.system(f"python3 {os.path.join(base_path, 'get_cookie.py')}")
+    click.echo("Obtained cookie.")
+
+@cmuroom.command("update")
+@click.option("--date", "-D", metavar="YYYY-MM-DD", default=today, help="The date for which to check events")
+def update(date):
+    """Update the day's events from 25Live and SOC"""
+    try:
+        date = dateutil.parser.parse(date).strftime("%Y-%m-%d")
+    except:
+        click.echo(f"Invalid date '{date}'.", err=True)
+        sys.exit(1)
+
+    click.echo("Starting download. This may take several minutes.")
+    os.system(f"python3 {os.path.join(base_path, 'get_events.py')} {date}")
+    click.echo("Download finished")
+
+@cmuroom.command("categories")
+def categories():
+    """Get the list of categories"""
+    c = [click.style("all", bold=True, fg="green"),
+         click.style("default", bold=True, fg="green"),
+         *CATEGORIES]
+    click.echo("List of Categories:")
+    click.echo("\n".join("  - "+x for x in c))
+
+@cmuroom.command("rooms")
+@click.option("--favorite", "-f",
+              is_flag=True, default=False, help="Show favorite rooms only")
+@click.option("--require-full", "-r",
+              is_flag=True, default=False, help="Require full information from 25Live")
+@click.option("--filter", "-F",
+              metavar="KEYWORD", default="", help="Keyword to filter rooms by")
+@click.option("--category", "-C",
+              metavar="CATEGORIES", default="default", help="Comma-separated list of categories")
+@click.option("--min-capacity", "-M",
+              metavar="CAPACITY", type=int, default=0, help="Minimum capacity for the room")
+def rooms(favorite, require_full, filter, category, min_capacity):
+    """Get list of rooms in the given categories"""
+    sp = get_spaces(spaces, category, min_capacity, filter, require_full, favorite)
+
+    all_cats = set(x["category"] for x in sp)
+    include_cat = len(all_cats) > 1
+
+    header = ["", "Index", "Location", "Category", "Capacity"]
+    rows = [(STAR_CHAR if x["location"] in FAVORITES else NO_STAR_CHAR,
+             str(spaces.index(x)), x["location"], x["category"],
+             str(x["capacity"]) if x["capacity"] > 0 else "?") for x in sp]
+
+    rows = sorted(rows, key=lambda x: ("A" if x[0] == STAR_CHAR else "B") + x[2])
+
+    lengths = [max(len(a[i]) for a in [header]+rows) for i in range(len(rows[0]))]
+
+    header = [a.ljust(lengths[i]) for i, a in enumerate(header)]
+    rows = [[a.ljust(lengths[i]) for i, a in enumerate(row)] for row in rows]
+
+    rows = [(fav, ind,
+             click.style(loc, bold=(fav == STAR_CHAR),
+                fg="green" if fav == STAR_CHAR else "red" if spaces[int(ind)]["25live_id"] is None else "white"),
+             cat, cap) for fav, ind, loc, cat, cap in rows]
+
+    if not include_cat:
+        header = header[0:3] + header[4:5]
+        rows = [row[0:3] + row[4:5] for row in rows]
+
+    if not SHOW_STARS:
+        header = header[1:]
+        rows = [row[1:] for row in rows]
+
+    print_table(header, rows)
+
+@cmuroom.command("room")
+@click.option("--verbose", "-v",
+              is_flag=True, default=False, help="Show extra information about events")
+@click.option("--date", "-D",
+              metavar="DATE", default=today, help="The date for which to check events")
+@click.argument("location", nargs=-1, required=True)
+def room(verbose, date, location):
+    """Get information and events for a given room"""
+
+    try:
+        date = dateutil.parser.parse(date).strftime("%Y-%m-%d")
+    except:
+        click.echo(f"Invalid date '{date}'.", err=True)
+        sys.exit(1)
+
+    location = " ".join(location)
+
+    if location.isdigit() and int(location) < len(spaces):
+        room = spaces[int(location)]
+    else:
+        room = [x for x in spaces if x["location"].lower().replace(" ", "") == location.lower().replace(" ", "")]
+
+        if len(room) != 1:
+            click.echo(f"Invalid location '{location}'", err=True)
+            sys.exit(1)
+
+        room = room[0]
+
+    click.secho(f"{room['name']}", fg="blue", bold=True, underline=True, nl=False)
+    click.secho(f" ({room['location']})")
+    click.echo("")
+
+    if room["capacity"] != 0: click.echo(f"{click.style('Capacity:', fg='green')} {room['capacity']}")
+    click.echo(f"{click.style('Category:', fg='green')} {room['category']}")
+    click.echo(f"{click.style('25Live:', fg='green')}   {'No' if room['25live_id'] is None else 'Yes'}")
+    if len(room["notes"]) > 0: click.echo(f"{click.style('Notes:', fg='green')}    {room['notes']}")
+
+    if len(room["comment"]) > 0:
+        comment = room["comment"].replace('\n\n', '\n')
+        click.secho(f"\n{comment}", dim=True)
+
+    click.echo("")
+
+    events = load_events(date)
+    events = events[room["location"]]
+    blocks = events_to_blocks(events)
+
+    rows = []
+    max_len = 0
+    for x in blocks:
+        delta = x["end"] - x["start"]
+        short_time = True if x["available"] and delta.seconds < MIN_AVAILABLE_TIME_SECONDS else None
+        long_avail = x["available"] and not short_time
+
+        text1 = f"{format_time_delta(x['start'], x['end']).ljust(10)} ({x['start'].strftime('%I:%M%p')} - {x['end'].strftime('%I:%M%p')})"
+        if long_avail:
+            text1 += " - Available"
+        elif x["available"]:
+            pass
+        else:
+            text1 += " - " + x["status"]
+
+        text2 = x["name"] if not x["available"] else ""
+        if not x["available"]:
+            text2 += f" ({x['source']})"
+
+        if len(text2) > (MAX_WIDTH - 9) and not verbose:
+            text2 = text2[:MAX_WIDTH-9] + "..."
+
+        max_len = max(max_len, len(text1), len(text2))
+
+        text1 = click.style(text1, fg="green" if long_avail else "white", bold=long_avail, dim=short_time)
+        text2 = click.style(text2, fg="green" if long_avail else "white", bold=False, dim=short_time)
+
+        if short_time:
+            rows.append((text1,))
+        elif long_avail:
+            rows.append((text1,))
+        elif verbose and len(x["comment"]) > 0:
+            rows.append((text1, text2, "") + tuple(x["comment"].splitlines()))
+        else:
+            rows.append((text1, text2))
+
+    max_len += 2
+
+    click.secho(f"Schedule for {date}:", fg="blue", bold=True)
+    click.echo("┌──" + ("─" * max_len) + "──┐")
+
+    for i, row in enumerate(rows):
+        bottom_corners = ("└", "┘") if i == len(rows) - 1 else ("├", "┤")
+        for line in row:
+            if len(line) > max_len:
+                lines = ansiwrap.wrap(line, width=max_len)
+                for l in lines:
+                    click.echo("│  " + ljust_ansi(l, max_len) + "  │")
+            else:
+                click.echo("│  " + ljust_ansi(line, max_len) + "  │")
+
+        click.echo(f"{bottom_corners[0]}──" + ("─" * max_len) + f"──{bottom_corners[1]}")
+
+@cmuroom.command("available")
+@click.option("--favorite", "-f",
+              is_flag=True, default=False, help="Show favorite rooms only")
+@click.option("--require-full", "-r",
+              is_flag=True, default=False, help="Require full information from 25Live")
+@click.option("--verbose", "-v",
+              is_flag=True, default=False, help="Show extra information about events")
+@click.option("--date", "-D",
+              metavar="DATE", default=today, help="The date for which to check events")
+@click.option("--filter", "-F",
+              metavar="KEYWORD", default="", help="Keyword to filter rooms by")
+@click.option("--category", "-C",
+              metavar="CATEGORIES", default="default", help="Comma-separated list of categories")
+@click.option("--min-capacity", "-M",
+              metavar="CAPACITY", type=int, default=0, help="Minimum capacity for the room")
+@click.argument("number_of_hours", required=True)
+def available(favorite, require_full, verbose, date, filter, category, min_capacity, number_of_hours):
+    """Find rooms that are currently available and will continue to be available for the next NUMBER_OF_HOURS hours"""
+    sp = get_spaces(spaces, category, min_capacity, filter, require_full, favorite)
+    number_of_hours = parse_hours_delta(number_of_hours)
+
+    try:
+        date = dateutil.parser.parse(date).strftime("%Y-%m-%d")
+    except:
+        click.echo(f"Invalid date '{date}'.", err=True)
+        sys.exit(1)
+
+    if date != today:
+        click.secho("Warning: lookup date is not today", fg="red")
+
+    events_all = load_events(date)
+    blocks = [(room, events_to_blocks(events_all[room["location"]])) for room in sp]
+
+    print(blocks)
+
+    print(verbose, number_of_hours)
+
+if __name__ == "__main__":
+    cmuroom()

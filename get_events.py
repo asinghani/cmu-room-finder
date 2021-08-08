@@ -4,39 +4,25 @@ import pandas as pd
 import cmu_course_api
 from datetime import datetime
 from pprint import pprint
-import dateutil
+import dateutil.parser
 import string
 import re
 import copy
 from tqdm import tqdm
 import sys
 import pickle
-
-SPACES_NOTES = {
-    "HH 1305": "ECE Linux Cluster",
-    "ANS 101": "ECE 18-220 Lab",
-    "DH 2315": "Lørge lecture hall"
-}
-
-OVERRIDES = [
-    ("CFA ACH", "category", "studio")
-]
+from config import *
 
 with open("cookie.dat", "r") as f:
     COOKIES_25LIVE = {"WSSESSIONID": f.read().strip()}
 
-CATEGORIES = ["athletics", "computer_lab", "classroom", "cuc", "study_room", "admin", "other", "lab", "special_lab", "studio"]
-
 BASE_URL_25LIVE = "https://25live.collegenet.com/25live/data/cmu/run"
 
 SOC_FILE = "courses-f21.txt"
-CURRENT_MINI = 1
-CAMPUS = "Pittsburgh, Pennsylvania"
 
 # Pulled from advisor course list - https://www.cmu.edu/es/docs/classrooms_fyy.pdf
 # Parsed using https://tabula.technology/
 REGISTRAR_FILE = "registrar-classrooms-f21.csv"
-
 
 def strip(x):
     return " ".join(x.strip().split())
@@ -519,7 +505,7 @@ def get_space_events(space, soc_timings, date, course_names={}):
 
 
 def get_all_events(spaces, soc_timings, date, course_names={}):
-    return {space["name"]: get_space_events(space, soc_timings, date, course_names) for space in tqdm(spaces)}
+    return {space["location"]: get_space_events(space, soc_timings, date, course_names) for space in tqdm(spaces)}
 
 if len(sys.argv) < 2:
     print(f"Usage: {sys.argv[0]} <date>")
